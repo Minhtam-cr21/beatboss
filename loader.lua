@@ -1,37 +1,34 @@
-local MAIN_URL = "https://raw.githubusercontent.com/Minhtam-cr21/beatboss/main/main.lua"
-
 print("[AnimeBoss] Loader starting...")
-print("[AnimeBoss] URL:", MAIN_URL)
+
+local MAIN_URL =
+    "https://raw.githubusercontent.com/Minhtam-cr21/beatboss/main/main.lua?nocache="
+    .. os.time()
 
 local ok, source = pcall(function()
     return game:HttpGet(MAIN_URL)
 end)
 
 if not ok then
-    error("[AnimeBoss] HttpGet failed: " .. tostring(source))
+    error("[AnimeBoss] Cannot download main.lua: " .. tostring(source))
 end
 
 print("[AnimeBoss] Download length:", #source)
 print("[AnimeBoss] First content:", source:sub(1, 100))
 
+if type(source) ~= "string" or #source == 0 then
+    error("[AnimeBoss] main.lua returned empty content")
+end
+
 if source:find("404: Not Found", 1, true) then
-    error("[AnimeBoss] main.lua = 404 Not Found")
+    error("[AnimeBoss] main.lua URL returned 404")
 end
 
-if #source < 20 then
-    error("[AnimeBoss] main.lua quá ngắn: " .. tostring(#source) .. " bytes")
+local main, compileError = loadstring(source)
+
+if not main then
+    error("[AnimeBoss] main.lua compile error: " .. tostring(compileError))
 end
 
-local func, err = loadstring(source)
+print("[AnimeBoss] main.lua loaded successfully")
 
-if not func then
-    error("[AnimeBoss] Compile error: " .. tostring(err))
-end
-
-local success, runtimeError = pcall(func)
-
-if not success then
-    error("[AnimeBoss] Runtime error: " .. tostring(runtimeError))
-end
-
-print("[AnimeBoss] Loaded successfully.")
+main()
