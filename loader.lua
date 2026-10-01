@@ -1,34 +1,61 @@
-print("[AnimeBoss] Loader starting...")
+print("========== GAME INFO ==========")
+print("PlaceId:", game.PlaceId)
+print("GameId:", game.GameId)
+print("JobId:", game.JobId)
 
-local MAIN_URL =
-    "https://raw.githubusercontent.com/Minhtam-cr21/beatboss/main/main.lua?nocache="
-    .. os.time()
+local RS = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
 
-local ok, source = pcall(function()
-    return game:HttpGet(MAIN_URL)
-end)
+print("\n========== REMOTES ==========")
 
-if not ok then
-    error("[AnimeBoss] Cannot download main.lua: " .. tostring(source))
+for _, v in ipairs(RS:GetDescendants()) do
+    if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+        print(v.ClassName, v:GetFullName())
+    end
 end
 
-print("[AnimeBoss] Download length:", #source)
-print("[AnimeBoss] First content:", source:sub(1, 100))
+print("\n========== POSSIBLE RAID / CASTLE / UNIT OBJECTS ==========")
 
-if type(source) ~= "string" or #source == 0 then
-    error("[AnimeBoss] main.lua returned empty content")
+local keywords = {
+    "raid",
+    "castle",
+    "infinite",
+    "unit",
+    "equip",
+    "inventory",
+    "lobby",
+    "queue",
+    "teleport",
+    "stage",
+    "wave",
+    "battle"
+}
+
+for _, v in ipairs(game:GetDescendants()) do
+    local name = string.lower(v.Name)
+
+    for _, word in ipairs(keywords) do
+        if string.find(name, word, 1, true) then
+            print(v.ClassName, v:GetFullName())
+            break
+        end
+    end
 end
 
-if source:find("404: Not Found", 1, true) then
-    error("[AnimeBoss] main.lua URL returned 404")
+print("\n========== PLAYER GUI ==========")
+
+if player:FindFirstChild("PlayerGui") then
+    for _, v in ipairs(player.PlayerGui:GetDescendants()) do
+        local name = string.lower(v.Name)
+
+        if string.find(name, "raid")
+        or string.find(name, "castle")
+        or string.find(name, "unit")
+        or string.find(name, "equip") then
+            print(v.ClassName, v:GetFullName())
+        end
+    end
 end
 
-local main, compileError = loadstring(source)
-
-if not main then
-    error("[AnimeBoss] main.lua compile error: " .. tostring(compileError))
-end
-
-print("[AnimeBoss] main.lua loaded successfully")
-
-main()
+print("========== SCAN FINISHED ==========")
