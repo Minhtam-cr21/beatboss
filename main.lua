@@ -1,1430 +1,1220 @@
---[[
-    AnimeBossDemo Client Hub
-    Designed for the AnimeBossDemo project.
-
-    Requires:
-    ReplicatedStorage
-    └── AnimeBossDemo
-        ├── Config
-        ├── Request
-        └── State
-]]
-
--- =========================================================
--- SERVICES
--- =========================================================
+--========================================================
+-- BEATBOSS HUB
+-- Auto Infinity Castle
+-- Modern UI + Safe Unload
+--========================================================
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local UserInputService = game:GetService("UserInputService")
+local UIS = game:GetService("UserInputService")
+local VIM = game:GetService("VirtualInputManager")
+local TweenService = game:GetService("TweenService")
 
-local player = Players.LocalPlayer
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
 
-if not player then
-    error("[AnimeBoss] LocalPlayer not available")
+local ENV = getgenv()
+
+--========================================================
+-- AUTO UNLOAD BẢN CŨ KHI EXECUTE LẠI
+--========================================================
+
+if ENV.BeatBossHub and ENV.BeatBossHub.Unload then
+    pcall(function()
+        ENV.BeatBossHub.Unload()
+    end)
+
+    task.wait(0.2)
 end
 
--- =========================================================
--- CLEAN OLD INSTANCE
--- =========================================================
-
-local env = getgenv and getgenv() or _G
-
-if env.AnimeBossDemoHub then
-    if env.AnimeBossDemoHub.Stop then
-        pcall(env.AnimeBossDemoHub.Stop)
-    end
-end
-
-local Runtime = {
-    Running = true,
+local Hub = {
+    Alive = true,
+    AutoCastle = false,
     Connections = {},
-    AutoAttack = false
+    AutoTask = nil
 }
 
-env.AnimeBossDemoHub = Runtime
+ENV.BeatBossHub = Hub
 
--- =========================================================
--- FIND DEMO
--- =========================================================
+--========================================================
+-- GAME OBJECTS
+--========================================================
 
-local shared = ReplicatedStorage:WaitForChild(
-    "AnimeBossDemo",
-    10
-)
+local Main = PlayerGui:WaitForChild("Main")
 
-if not shared then
-    error(
-        "[AnimeBoss] ReplicatedStorage.AnimeBossDemo not found. " ..
-        "This client only works with AnimeBossDemo."
-    )
-end
+local InfinityFrame =
+    Main:WaitForChild("InfinityCastleFrame")
 
-local configModule = shared:WaitForChild("Config", 10)
-local request = shared:WaitForChild("Request", 10)
-local response = shared:WaitForChild("State", 10)
+local InfinityMain =
+    InfinityFrame:WaitForChild("Main")
 
-if not configModule then
-    error("[AnimeBoss] Config ModuleScript not found")
-end
+local EquipBest =
+    InfinityMain:WaitForChild("EquipBest")
 
-if not request then
-    error("[AnimeBoss] Request RemoteEvent not found")
-end
+local StartButton =
+    InfinityMain:WaitForChild("StartButton")
 
-if not response then
-    error("[AnimeBoss] State RemoteEvent not found")
-end
+local BattleFrame =
+    Main:WaitForChild("CastleStartFrame")
 
-local okConfig, Config = pcall(require, configModule)
+local RewardsFrame =
+    Main:WaitForChild("CastleRewardsFrame")
 
-if not okConfig then
-    error("[AnimeBoss] Cannot require Config: " .. tostring(Config))
-end
-
-print("[AnimeBoss] Server connection found.")
-
--- =========================================================
--- STATE
--- =========================================================
-
-local state = nil
-local selected = nil
-local confirmFusion = nil
-
-local pending = false
-local sequence = 0
-local lastSent = -math.huge
-
--- =========================================================
+--========================================================
 -- COLORS
--- =========================================================
+--========================================================
 
-local colors = {
-    Background = Color3.fromRGB(17, 20, 29),
-    Panel = Color3.fromRGB(29, 35, 48),
-    Panel2 = Color3.fromRGB(38, 46, 62),
+local Colors = {
+    Background = Color3.fromRGB(16, 17, 21),
+    Surface = Color3.fromRGB(24, 25, 30),
+    Surface2 = Color3.fromRGB(31, 32, 38),
 
-    Text = Color3.fromRGB(240, 243, 250),
-    Muted = Color3.fromRGB(150, 162, 185),
+    Border = Color3.fromRGB(52, 54, 63),
 
-    Accent = Color3.fromRGB(86, 190, 214),
-    Success = Color3.fromRGB(105, 210, 142),
-    Error = Color3.fromRGB(245, 118, 118)
+    Text = Color3.fromRGB(245, 245, 247),
+    Muted = Color3.fromRGB(148, 151, 163),
+
+    Green = Color3.fromRGB(57, 196, 105),
+    GreenDark = Color3.fromRGB(37, 128, 70),
+
+    Red = Color3.fromRGB(218, 72, 72),
+    RedDark = Color3.fromRGB(132, 48, 48),
+
+    Accent = Color3.fromRGB(112, 103, 255)
 }
 
--- =========================================================
--- UTILITIES
--- =========================================================
+--========================================================
+-- HELPERS
+--========================================================
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
 
     table.insert(
-        Runtime.Connections,
+        Hub.Connections,
         connection
     )
 
     return connection
 end
 
-local function make(className, properties, parent)
+local function round(parent, radius)
 
-    local object = Instance.new(className)
+    local corner = Instance.new("UICorner")
 
-    for key, value in pairs(properties or {}) do
-        object[key] = value
-    end
+    corner.CornerRadius =
+        UDim.new(0, radius)
 
-    if parent then
-        object.Parent = parent
-    end
+    corner.Parent = parent
 
-    return object
+    return corner
 end
 
-local function corner(object, radius)
+local function stroke(parent, color)
 
-    make(
-        "UICorner",
-        {
-            CornerRadius = UDim.new(0, radius or 8)
-        },
-        object
-    )
+    local uiStroke = Instance.new("UIStroke")
+
+    uiStroke.Color = color
+    uiStroke.Thickness = 1
+    uiStroke.Transparency = 0.25
+    uiStroke.Parent = parent
+
+    return uiStroke
 end
 
-local function stroke(object)
-
-    make(
-        "UIStroke",
-        {
-            Thickness = 1,
-            Transparency = 0.75,
-            Color = Color3.fromRGB(120, 140, 170)
-        },
-        object
-    )
-end
-
--- =========================================================
--- REMOVE OLD GUI
--- =========================================================
-
-local playerGui = player:WaitForChild("PlayerGui")
-
-local oldGui = playerGui:FindFirstChild(
-    "AnimeBossExecutorUI"
-)
-
-if oldGui then
-    oldGui:Destroy()
-end
-
--- =========================================================
--- GUI
--- =========================================================
-
-local gui = make(
-    "ScreenGui",
-    {
-        Name = "AnimeBossExecutorUI",
-        ResetOnSpawn = false,
-        IgnoreGuiInset = false,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    },
-    playerGui
-)
-
-local main = make(
-    "Frame",
-    {
-        Size = UDim2.fromOffset(520, 610),
-        Position = UDim2.new(
-            0,
-            24,
-            0.5,
-            -305
-        ),
-
-        BackgroundColor3 = colors.Background,
-        BorderSizePixel = 0
-    },
-    gui
-)
-
-corner(main, 14)
-stroke(main)
-
--- =========================================================
--- HEADER
--- =========================================================
-
-local header = make(
-    "Frame",
-    {
-        Size = UDim2.new(1, 0, 0, 58),
-
-        BackgroundColor3 = colors.Panel,
-        BorderSizePixel = 0
-    },
-    main
-)
-
-corner(header, 14)
-
-local title = make(
-    "TextLabel",
-    {
-        Size = UDim2.new(1, -130, 0, 30),
-        Position = UDim2.fromOffset(16, 7),
-
-        BackgroundTransparency = 1,
-
-        Text = "ANIME BOSS",
-        TextColor3 = colors.Text,
-
-        TextSize = 21,
-        Font = Enum.Font.GothamBold,
-
-        TextXAlignment = Enum.TextXAlignment.Left
-    },
-    header
-)
-
-local subtitle = make(
-    "TextLabel",
-    {
-        Size = UDim2.new(1, -130, 0, 18),
-        Position = UDim2.fromOffset(16, 33),
-
-        BackgroundTransparency = 1,
-
-        Text = "AnimeBossDemo Client",
-        TextColor3 = colors.Muted,
-
-        TextSize = 11,
-        Font = Enum.Font.Gotham,
-
-        TextXAlignment = Enum.TextXAlignment.Left
-    },
-    header
-)
-
-local close = make(
-    "TextButton",
-    {
-        Size = UDim2.fromOffset(38, 34),
-
-        Position = UDim2.new(
-            1,
-            -48,
-            0,
-            12
-        ),
-
-        BackgroundColor3 = colors.Panel2,
-
-        BorderSizePixel = 0,
-
-        Text = "X",
-        TextColor3 = colors.Text,
-
-        Font = Enum.Font.GothamBold,
-        TextSize = 13
-    },
-    header
-)
-
-corner(close, 8)
-
--- =========================================================
--- SCROLL
--- =========================================================
-
-local scroll = make(
-    "ScrollingFrame",
-    {
-        Size = UDim2.new(
-            1,
-            -20,
-            1,
-            -78
-        ),
-
-        Position = UDim2.fromOffset(
-            10,
-            68
-        ),
-
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-
-        ScrollBarThickness = 3,
-
-        AutomaticCanvasSize =
-            Enum.AutomaticSize.Y,
-
-        CanvasSize =
-            UDim2.new()
-    },
-    main
-)
-
-local layout = make(
-    "UIListLayout",
-    {
-        Padding = UDim.new(
-            0,
-            8
-        ),
-
-        SortOrder =
-            Enum.SortOrder.LayoutOrder
-    },
-    scroll
-)
-
-local order = 0
-
--- =========================================================
--- UI FUNCTIONS
--- =========================================================
-
-local function label(
-    text,
-    height,
-    fontSize,
-    color
-)
-
-    order = order + 1
-
-    return make(
-        "TextLabel",
-        {
-            Size = UDim2.new(
-                1,
-                -10,
-                0,
-                height or 28
-            ),
-
-            LayoutOrder = order,
-
-            BackgroundTransparency = 1,
-
-            Text = text,
-
-            TextColor3 =
-                color or colors.Text,
-
-            TextSize =
-                fontSize or 13,
-
-            Font =
-                Enum.Font.Gotham,
-
-            TextWrapped = true,
-
-            TextXAlignment =
-                Enum.TextXAlignment.Left
-        },
-        scroll
-    )
-end
-
-local function section(text)
-
-    order = order + 1
-
-    local frame = make(
-        "Frame",
-        {
-            Size = UDim2.new(
-                1,
-                -10,
-                0,
-                34
-            ),
-
-            LayoutOrder = order,
-
-            BackgroundColor3 =
-                colors.Panel,
-
-            BorderSizePixel = 0
-        },
-        scroll
-    )
-
-    corner(frame, 8)
-
-    make(
-        "TextLabel",
-        {
-            Size = UDim2.new(
-                1,
-                -18,
-                1,
-                0
-            ),
-
-            Position =
-                UDim2.fromOffset(
-                    9,
-                    0
-                ),
-
-            BackgroundTransparency = 1,
-
-            Text = text,
-
-            TextColor3 =
-                colors.Accent,
-
-            TextSize = 13,
-
-            Font =
-                Enum.Font.GothamBold,
-
-            TextXAlignment =
-                Enum.TextXAlignment.Left
-        },
-        frame
-    )
-end
-
-local function buttonRow(specs)
-
-    order = order + 1
-
-    local frame = make(
-        "Frame",
-        {
-            Size = UDim2.new(
-                1,
-                -10,
-                0,
-                42
-            ),
-
-            LayoutOrder = order,
-
-            BackgroundTransparency = 1
-        },
-        scroll
-    )
-
-    for index, spec in ipairs(specs) do
-
-        local count = #specs
-
-        local button = make(
-            "TextButton",
-            {
-                Size = UDim2.new(
-                    1 / count,
-                    -5,
-                    1,
-                    0
-                ),
-
-                Position = UDim2.new(
-                    (index - 1) / count,
-                    0,
-                    0,
-                    0
-                ),
-
-                BackgroundColor3 =
-                    colors.Panel,
-
-                BorderSizePixel = 0,
-
-                Text = spec[1],
-
-                TextColor3 =
-                    colors.Text,
-
-                TextSize = 12,
-
-                TextWrapped = true,
-
-                Font =
-                    Enum.Font.GothamMedium
-            },
-            frame
+local function tween(object, properties)
+
+    local info =
+        TweenInfo.new(
+            0.16,
+            Enum.EasingStyle.Quad,
+            Enum.EasingDirection.Out
         )
 
-        corner(button, 8)
-
-        connect(
-            button.Activated,
-            spec[2]
-        )
-    end
-
-    return frame
+    TweenService:Create(
+        object,
+        info,
+        properties
+    ):Play()
 end
 
--- =========================================================
--- STATUS
--- =========================================================
+--========================================================
+-- ROOT UI
+--========================================================
 
-section("STATUS")
-
-local wallet =
-    label(
-        "Waiting for server...",
-        30,
-        14
+local Old =
+    PlayerGui:FindFirstChild(
+        "BeatBossHubUI"
     )
 
-local stats =
-    label(
-        "",
-        32,
-        12,
-        colors.Muted
+if Old then
+    Old:Destroy()
+end
+
+local ScreenGui =
+    Instance.new("ScreenGui")
+
+ScreenGui.Name = "BeatBossHubUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = false
+ScreenGui.ZIndexBehavior =
+    Enum.ZIndexBehavior.Sibling
+
+ScreenGui.Parent = PlayerGui
+
+Hub.Gui = ScreenGui
+
+--========================================================
+-- MAIN WINDOW
+--========================================================
+
+local Window =
+    Instance.new("Frame")
+
+Window.Name = "Window"
+Window.Size =
+    UDim2.new(
+        0,
+        390,
+        0,
+        285
     )
 
-local battleLabel =
-    label(
-        "No encounter",
-        46,
-        14
+Window.Position =
+    UDim2.new(
+        0.5,
+        -195,
+        0.33,
+        0
     )
 
-local message =
-    label(
-        "Connecting...",
-        46,
-        12,
-        colors.Muted
+Window.BackgroundColor3 =
+    Colors.Background
+
+Window.BorderSizePixel = 0
+
+Window.Parent = ScreenGui
+
+round(Window, 16)
+stroke(Window, Colors.Border)
+
+--========================================================
+-- TOP BAR
+--========================================================
+
+local Top =
+    Instance.new("Frame")
+
+Top.Size =
+    UDim2.new(
+        1,
+        0,
+        0,
+        68
     )
 
--- =========================================================
--- SEND REQUEST
--- =========================================================
+Top.BackgroundTransparency = 1
+Top.Parent = Window
 
-local function send(action, argument)
+local Title =
+    Instance.new("TextLabel")
 
-    if not Runtime.Running then
-        return
-    end
-
-    local now = os.clock()
-
-    local requestInterval =
-        Config.RequestInterval or 0.15
-
-    if pending then
-        return
-    end
-
-    if now - lastSent <
-        requestInterval + 0.03
-    then
-        return
-    end
-
-    lastSent = now
-
-    if action ~= "Fuse" then
-        confirmFusion = nil
-    end
-
-    pending = true
-
-    sequence = sequence + 1
-
-    local current =
-        sequence
-
-    message.Text =
-        "Waiting for server..."
-
-    message.TextColor3 =
-        colors.Muted
-
-    request:FireServer(
-        action,
-        argument
+Title.Size =
+    UDim2.new(
+        1,
+        -100,
+        0,
+        28
     )
 
-    task.delay(
+Title.Position =
+    UDim2.new(
+        0,
+        20,
+        0,
+        13
+    )
+
+Title.BackgroundTransparency = 1
+
+Title.Text =
+    "BeatBoss"
+
+Title.TextColor3 =
+    Colors.Text
+
+Title.TextSize = 21
+Title.Font =
+    Enum.Font.GothamBold
+
+Title.TextXAlignment =
+    Enum.TextXAlignment.Left
+
+Title.Parent = Top
+
+local Subtitle =
+    Instance.new("TextLabel")
+
+Subtitle.Size =
+    UDim2.new(
+        1,
+        -100,
+        0,
+        18
+    )
+
+Subtitle.Position =
+    UDim2.new(
+        0,
+        20,
+        0,
+        39
+    )
+
+Subtitle.BackgroundTransparency = 1
+
+Subtitle.Text =
+    "Infinity Castle automation"
+
+Subtitle.TextColor3 =
+    Colors.Muted
+
+Subtitle.TextSize = 12
+
+Subtitle.Font =
+    Enum.Font.GothamMedium
+
+Subtitle.TextXAlignment =
+    Enum.TextXAlignment.Left
+
+Subtitle.Parent = Top
+
+--========================================================
+-- CLOSE / UNLOAD ICON
+--========================================================
+
+local Close =
+    Instance.new("TextButton")
+
+Close.Size =
+    UDim2.new(
+        0,
+        34,
+        0,
+        34
+    )
+
+Close.Position =
+    UDim2.new(
+        1,
+        -49,
+        0,
+        17
+    )
+
+Close.BackgroundColor3 =
+    Colors.Surface2
+
+Close.Text = "×"
+
+Close.TextColor3 =
+    Colors.Muted
+
+Close.TextSize = 22
+
+Close.Font =
+    Enum.Font.GothamMedium
+
+Close.AutoButtonColor = false
+
+Close.Parent = Top
+
+round(Close, 9)
+stroke(Close, Colors.Border)
+
+--========================================================
+-- CONTENT CARD
+--========================================================
+
+local Card =
+    Instance.new("Frame")
+
+Card.Size =
+    UDim2.new(
+        1,
+        -32,
+        0,
+        126
+    )
+
+Card.Position =
+    UDim2.new(
+        0,
+        16,
+        0,
+        72
+    )
+
+Card.BackgroundColor3 =
+    Colors.Surface
+
+Card.BorderSizePixel = 0
+
+Card.Parent = Window
+
+round(Card, 12)
+stroke(Card, Colors.Border)
+
+--========================================================
+-- FEATURE TITLE
+--========================================================
+
+local FeatureTitle =
+    Instance.new("TextLabel")
+
+FeatureTitle.Size =
+    UDim2.new(
+        1,
+        -100,
+        0,
+        26
+    )
+
+FeatureTitle.Position =
+    UDim2.new(
+        0,
+        16,
+        0,
+        15
+    )
+
+FeatureTitle.BackgroundTransparency = 1
+
+FeatureTitle.Text =
+    "Auto Infinity Castle"
+
+FeatureTitle.TextColor3 =
+    Colors.Text
+
+FeatureTitle.TextSize = 15
+
+FeatureTitle.Font =
+    Enum.Font.GothamSemibold
+
+FeatureTitle.TextXAlignment =
+    Enum.TextXAlignment.Left
+
+FeatureTitle.Parent = Card
+
+local FeatureDesc =
+    Instance.new("TextLabel")
+
+FeatureDesc.Size =
+    UDim2.new(
+        1,
+        -32,
+        0,
+        34
+    )
+
+FeatureDesc.Position =
+    UDim2.new(
+        0,
+        16,
+        0,
+        43
+    )
+
+FeatureDesc.BackgroundTransparency = 1
+
+FeatureDesc.Text =
+    "Automatically equips the best units and starts Infinity Castle."
+
+FeatureDesc.TextColor3 =
+    Colors.Muted
+
+FeatureDesc.TextSize = 11
+
+FeatureDesc.Font =
+    Enum.Font.GothamMedium
+
+FeatureDesc.TextWrapped = true
+
+FeatureDesc.TextXAlignment =
+    Enum.TextXAlignment.Left
+
+FeatureDesc.TextYAlignment =
+    Enum.TextYAlignment.Top
+
+FeatureDesc.Parent = Card
+
+--========================================================
+-- TOGGLE
+--========================================================
+
+local Toggle =
+    Instance.new("TextButton")
+
+Toggle.Size =
+    UDim2.new(
+        0,
+        52,
+        0,
+        28
+    )
+
+Toggle.Position =
+    UDim2.new(
+        1,
+        -68,
+        0,
+        16
+    )
+
+Toggle.BackgroundColor3 =
+    Colors.Surface2
+
+Toggle.Text = ""
+
+Toggle.AutoButtonColor = false
+
+Toggle.Parent = Card
+
+round(Toggle, 14)
+
+local Knob =
+    Instance.new("Frame")
+
+Knob.Size =
+    UDim2.new(
+        0,
+        22,
+        0,
+        22
+    )
+
+Knob.Position =
+    UDim2.new(
+        0,
         3,
-        function()
-
-            if not Runtime.Running then
-                return
-            end
-
-            if current == sequence
-                and pending then
-
-                pending = false
-
-                message.Text =
-                    "No server response."
-
-                message.TextColor3 =
-                    colors.Error
-            end
-        end
+        0.5,
+        -11
     )
-end
 
--- =========================================================
--- ENCOUNTER
--- =========================================================
+Knob.BackgroundColor3 =
+    Color3.fromRGB(
+        210,
+        210,
+        215
+    )
 
-section("ENCOUNTER")
+Knob.BorderSizePixel = 0
+Knob.Parent = Toggle
 
-buttonRow({
-    {
-        "Boss",
-        function()
-            send(
-                "Start",
-                "Boss"
-            )
-        end
-    },
+round(Knob, 11)
 
-    {
-        "Raid",
-        function()
-            send(
-                "Start",
-                "Raid"
-            )
-        end
-    },
+--========================================================
+-- STATUS PILL
+--========================================================
 
-    {
-        "Castle",
-        function()
-            send(
-                "Start",
-                "Castle"
-            )
-        end
-    }
-})
+local StatusHolder =
+    Instance.new("Frame")
 
-buttonRow({
-    {
-        "ATTACK",
-        function()
-            send("Attack")
-        end
-    },
+StatusHolder.Size =
+    UDim2.new(
+        1,
+        -32,
+        0,
+        30
+    )
 
-    {
-        "LEAVE",
-        function()
-            send("Leave")
-        end
-    },
+StatusHolder.Position =
+    UDim2.new(
+        0,
+        16,
+        1,
+        -40
+    )
 
-    {
-        "REFRESH",
-        function()
-            send("Sync")
-        end
-    }
-})
+StatusHolder.BackgroundColor3 =
+    Colors.Surface2
 
--- =========================================================
--- AUTO ATTACK
--- =========================================================
+StatusHolder.BorderSizePixel = 0
 
-local autoAttackButton
+StatusHolder.Parent = Card
 
-autoAttackButton =
-    buttonRow({
-        {
-            "Auto Attack: OFF",
+round(StatusHolder, 8)
 
-            function()
+local Dot =
+    Instance.new("Frame")
 
-                Runtime.AutoAttack =
-                    not Runtime.AutoAttack
+Dot.Size =
+    UDim2.new(
+        0,
+        8,
+        0,
+        8
+    )
 
-                local buttons =
-                    autoAttackButton:
-                    GetChildren()
+Dot.Position =
+    UDim2.new(
+        0,
+        11,
+        0.5,
+        -4
+    )
 
-                for _, object
-                    in ipairs(buttons) do
+Dot.BackgroundColor3 =
+    Colors.Red
 
-                    if object:
-                        IsA("TextButton") then
+Dot.BorderSizePixel = 0
+Dot.Parent = StatusHolder
 
-                        object.Text =
-                            Runtime.AutoAttack
-                            and
-                            "Auto Attack: ON"
-                            or
-                            "Auto Attack: OFF"
-                    end
-                end
-            end
-        }
-    })
+round(Dot, 4)
 
-task.spawn(function()
+local Status =
+    Instance.new("TextLabel")
 
-    while Runtime.Running do
+Status.Size =
+    UDim2.new(
+        1,
+        -32,
+        1,
+        0
+    )
 
-        if Runtime.AutoAttack
-            and state
-            and state.Battle
-            and not pending then
-
-            send("Attack")
-        end
-
-        task.wait(
-            math.max(
-                Config.AttackInterval
-                    or 0.45,
-                0.45
-            )
-        )
-    end
-end)
-
--- =========================================================
--- RAID AUTO EQUIP
--- =========================================================
-
-local autoEquipLabel =
-    label(
-        "Raid Auto Equip: loading...",
+Status.Position =
+    UDim2.new(
+        0,
         28,
-        12,
-        colors.Accent
+        0,
+        0
     )
 
-buttonRow({
-    {
-        "Toggle Raid Auto Equip",
+Status.BackgroundTransparency = 1
 
-        function()
+Status.Text =
+    "Disabled"
 
-            if state then
+Status.TextColor3 =
+    Colors.Muted
 
-                send(
-                    "SetRaidAutoEquip",
-                    not
-                    state.AutoEquipBestRaid
-                )
-            end
-        end
-    }
-})
+Status.TextSize = 11
 
--- =========================================================
--- REWARDS
--- =========================================================
+Status.Font =
+    Enum.Font.GothamMedium
 
-section("REWARDS")
+Status.TextXAlignment =
+    Enum.TextXAlignment.Left
 
-local rewards =
-    label(
-        "No pending rewards",
-        32,
-        12,
-        colors.Muted
+Status.Parent = StatusHolder
+
+--========================================================
+-- UNLOAD BUTTON
+--========================================================
+
+local Unload =
+    Instance.new("TextButton")
+
+Unload.Size =
+    UDim2.new(
+        1,
+        -32,
+        0,
+        48
     )
 
-buttonRow({
-    {
-        "Collect Reward",
-        function()
-            send("Collect")
-        end
-    }
-})
-
--- =========================================================
--- SUMMON
--- =========================================================
-
-section("SUMMON")
-
-buttonRow({
-    {
-        "Fighter",
-        function()
-            send(
-                "Roll",
-                "Fighter"
-            )
-        end
-    },
-
-    {
-        "Boss",
-        function()
-            send(
-                "Roll",
-                "Boss"
-            )
-        end
-    }
-})
-
--- =========================================================
--- TEAM
--- =========================================================
-
-section("TEAM")
-
-buttonRow({
-    {
-        "Equip Best",
-        function()
-            send(
-                "EquipBest"
-            )
-        end
-    }
-})
-
-local selectedLabel =
-    label(
-        "Select a unit.",
-        48,
-        12
+Unload.Position =
+    UDim2.new(
+        0,
+        16,
+        1,
+        -64
     )
 
-local function unitAction(action)
+Unload.BackgroundColor3 =
+    Color3.fromRGB(
+        42,
+        25,
+        28
+    )
 
-    if not selected then
+Unload.Text =
+    "Unload Script"
 
-        message.Text =
-            "Select a unit first."
+Unload.TextColor3 =
+    Color3.fromRGB(
+        235,
+        105,
+        105
+    )
 
-        message.TextColor3 =
-            colors.Error
+Unload.TextSize = 13
 
+Unload.Font =
+    Enum.Font.GothamSemibold
+
+Unload.AutoButtonColor = false
+
+Unload.Parent = Window
+
+round(Unload, 10)
+
+local UnloadStroke =
+    stroke(
+        Unload,
+        Colors.RedDark
+    )
+
+--========================================================
+-- STATUS FUNCTIONS
+--========================================================
+
+local function setStatus(text, active)
+
+    if not Hub.Alive then
         return
     end
 
-    if action == "Fuse" then
-
-        if confirmFusion
-            ~= selected then
-
-            confirmFusion =
-                selected
-
-            message.Text =
-                "Press Fuse again to confirm."
-
-            message.TextColor3 =
-                colors.Muted
-
-            return
-        end
-
-        confirmFusion = nil
-    end
-
-    send(
-        action,
-        selected
-    )
-end
-
-buttonRow({
-    {
-        "Equip",
-        function()
-            unitAction(
-                "Equip"
-            )
-        end
-    },
-
-    {
-        "Upgrade",
-        function()
-            unitAction(
-                "Upgrade"
-            )
-        end
-    },
-
-    {
-        "Fuse",
-        function()
-            unitAction(
-                "Fuse"
-            )
-        end
-    }
-})
-
-buttonRow({
-    {
-        "Mutation",
-        function()
-            unitAction(
-                "Mutation"
-            )
-        end
-    },
-
-    {
-        "Awaken",
-        function()
-            unitAction(
-                "Awaken"
-            )
-        end
-    }
-})
-
--- =========================================================
--- INVENTORY
--- =========================================================
-
-section("INVENTORY")
-
-order = order + 1
-
-local inventory =
-    make(
-        "Frame",
-        {
-            Size = UDim2.new(
-                1,
-                -10,
-                0,
-                0
-            ),
-
-            AutomaticSize =
-                Enum.AutomaticSize.Y,
-
-            BackgroundTransparency = 1,
-
-            LayoutOrder = order
-        },
-        scroll
-    )
-
-make(
-    "UIListLayout",
-    {
-        Padding =
-            UDim.new(
-                0,
-                5
-            ),
-
-        SortOrder =
-            Enum.SortOrder.LayoutOrder
-    },
-    inventory
-)
-
-local inventorySignature = ""
-
-local function renderInventory()
-
-    if not state then
-        return
-    end
-
-    local signatureParts = {
-        tostring(selected)
-    }
-
-    for _, unit
-        in ipairs(state.Units or {}) do
-
-        table.insert(
-            signatureParts,
-
-            table.concat({
-                unit.UID,
-                unit.Level,
-                unit.Fusion,
-                unit.Mutation,
-                tostring(
-                    unit.Awakened
-                ),
-                tostring(
-                    unit.Equipped
-                )
-            }, ":")
-        )
-    end
-
-    local signature =
-        table.concat(
-            signatureParts,
-            "|"
-        )
-
-    if signature ==
-        inventorySignature then
-
-        return
-    end
-
-    inventorySignature =
-        signature
-
-    for _, child
-        in ipairs(
-            inventory:
-            GetChildren()
-        ) do
-
-        if child:
-            IsA("TextButton") then
-
-            child:Destroy()
-        end
-    end
-
-    for index, unit
-        in ipairs(
-            state.Units or {}
-        ) do
-
-        local text =
-            string.format(
-                "%s#%d %s · %s\nLv.%d | Fusion %d | %s | Power %d%s",
-
-                unit.Equipped
-                    and "[TEAM] "
-                    or "",
-
-                unit.UID,
-
-                tostring(unit.Name),
-
-                tostring(unit.Rarity),
-
-                unit.Level,
-
-                unit.Fusion,
-
-                tostring(
-                    unit.Mutation
-                ),
-
-                unit.Power,
-
-                unit.Awakened
-                    and
-                    " | Awakened"
-                    or ""
-            )
-
-        local unitButton =
-            make(
-                "TextButton",
-                {
-                    Size =
-                        UDim2.new(
-                            1,
-                            0,
-                            0,
-                            58
-                        ),
-
-                    LayoutOrder =
-                        index,
-
-                    BackgroundColor3 =
-                        unit.UID ==
-                            selected
-                        and
-                        Color3.fromRGB(
-                            40,
-                            78,
-                            91
-                        )
-                        or
-                        colors.Panel,
-
-                    BorderSizePixel = 0,
-
-                    Text = text,
-
-                    TextColor3 =
-                        colors.Text,
-
-                    TextSize = 11,
-
-                    TextWrapped = true,
-
-                    Font =
-                        Enum.Font.Gotham
-                },
-                inventory
-            )
-
-        corner(
-            unitButton,
-            8
-        )
-
-        connect(
-            unitButton.Activated,
-
-            function()
-
-                selected =
-                    unit.UID
-
-                confirmFusion =
-                    nil
-
-                selectedLabel.Text =
-                    string.format(
-                        "Selected #%d %s\nUpgrade: %d coins",
-
-                        unit.UID,
-
-                        tostring(
-                            unit.Name
-                        ),
-
-                        unit.Level * 25
-                    )
-
-                inventorySignature = ""
-
-                renderInventory()
-            end
-        )
+    Status.Text = text
+
+    if active then
+        Dot.BackgroundColor3 =
+            Colors.Green
+    else
+        Dot.BackgroundColor3 =
+            Colors.Red
     end
 end
 
--- =========================================================
--- RECEIVE SERVER STATE
--- =========================================================
+local function updateToggle()
 
-connect(
-    response.OnClientEvent,
+    if Hub.AutoCastle then
 
-    function(
-        snapshot,
-        text,
-        successful
-    )
+        tween(
+            Toggle,
+            {
+                BackgroundColor3 =
+                    Colors.GreenDark
+            }
+        )
 
-        pending = false
-
-        if type(snapshot)
-            ~= "table" then
-
-            message.Text =
-                "Invalid server state."
-
-            message.TextColor3 =
-                colors.Error
-
-            return
-        end
-
-        state = snapshot
-
-        message.Text =
-            text or "Ready"
-
-        message.TextColor3 =
-            successful == false
-            and colors.Error
-            or colors.Text
-
-        wallet.Text =
-            string.format(
-                "Coins: %d    Gems: %d    Crystals: %d",
-
-                state.Coins or 0,
-
-                state.Gems or 0,
-
-                state.Crystals or 0
-            )
-
-        stats.Text =
-            string.format(
-                "Power: %d | Wins: %d | Best room: %d | Units: %d/%d",
-
-                state.TeamPower or 0,
-
-                state.Wins or 0,
-
-                state.BestRoom or 0,
-
-                #(state.Units or {}),
-
-                Config.InventoryLimit
-                    or 100
-            )
-
-        if state.Battle then
-
-            local battle =
-                state.Battle
-
-            battleLabel.Text =
-                string.format(
-                    "%s | Wave %d/%d\nHP %d / %d",
-
-                    tostring(
-                        battle.Mode
+        tween(
+            Knob,
+            {
+                Position =
+                    UDim2.new(
+                        1,
+                        -25,
+                        0.5,
+                        -11
                     ),
 
-                    battle.Wave,
+                BackgroundColor3 =
+                    Color3.new(
+                        1,
+                        1,
+                        1
+                    )
+            }
+        )
 
-                    battle.Waves,
+    else
 
-                    battle.Health,
+        tween(
+            Toggle,
+            {
+                BackgroundColor3 =
+                    Colors.Surface2
+            }
+        )
 
-                    battle.MaxHealth
+        tween(
+            Knob,
+            {
+                Position =
+                    UDim2.new(
+                        0,
+                        3,
+                        0.5,
+                        -11
+                    ),
+
+                BackgroundColor3 =
+                    Color3.fromRGB(
+                        210,
+                        210,
+                        215
+                    )
+            }
+        )
+
+    end
+end
+
+--========================================================
+-- GAME BUTTON CLICK
+--========================================================
+
+local function clickButton(button)
+
+    if not Hub.Alive then
+        return false
+    end
+
+    if not button then
+        return false
+    end
+
+    if not button.Visible then
+        return false
+    end
+
+    -- Executor firesignal
+    if firesignal then
+
+        local success =
+            pcall(function()
+
+                firesignal(
+                    button.MouseButton1Click
                 )
+
+            end)
+
+        if success then
+            return true
+        end
+
+        pcall(function()
+
+            firesignal(
+                button.Activated
+            )
+
+        end)
+
+    end
+
+    -- Virtual mouse fallback
+    local pos =
+        button.AbsolutePosition
+        + button.AbsoluteSize / 2
+
+    pcall(function()
+
+        VIM:SendMouseButtonEvent(
+            pos.X,
+            pos.Y,
+            0,
+            true,
+            game,
+            0
+        )
+
+        task.wait(0.05)
+
+        VIM:SendMouseButtonEvent(
+            pos.X,
+            pos.Y,
+            0,
+            false,
+            game,
+            0
+        )
+
+    end)
+
+    return true
+end
+
+--========================================================
+-- AUTO CASTLE LOOP
+--========================================================
+
+local function runAutoCastle()
+
+    if Hub.AutoTask then
+        return
+    end
+
+    Hub.AutoTask =
+        task.spawn(function()
+
+            while
+                Hub.Alive
+                and Hub.AutoCastle
+            do
+
+                -- Castle selection screen
+                if InfinityFrame.Visible then
+
+                    setStatus(
+                        "Equipping best units...",
+                        true
+                    )
+
+                    clickButton(
+                        EquipBest
+                    )
+
+                    task.wait(0.6)
+
+                    if
+                        not Hub.Alive
+                        or not Hub.AutoCastle
+                    then
+                        break
+                    end
+
+                    setStatus(
+                        "Starting Infinity Castle...",
+                        true
+                    )
+
+                    clickButton(
+                        StartButton
+                    )
+
+                    local timeout =
+                        os.clock() + 8
+
+                    while
+                        Hub.Alive
+                        and Hub.AutoCastle
+                        and not BattleFrame.Visible
+                        and os.clock() < timeout
+                    do
+                        task.wait(0.2)
+                    end
+
+                    if BattleFrame.Visible then
+
+                        setStatus(
+                            "Battle in progress",
+                            true
+                        )
+
+                    else
+
+                        setStatus(
+                            "Start failed - retrying",
+                            false
+                        )
+
+                        task.wait(1.5)
+
+                    end
+
+                -- Fighting
+                elseif BattleFrame.Visible then
+
+                    setStatus(
+                        "Battle in progress",
+                        true
+                    )
+
+                    repeat
+
+                        task.wait(0.4)
+
+                    until
+                        not Hub.Alive
+                        or not Hub.AutoCastle
+                        or not BattleFrame.Visible
+
+                -- Rewards
+                elseif RewardsFrame.Visible then
+
+                    setStatus(
+                        "Waiting at reward screen",
+                        true
+                    )
+
+                    task.wait(0.5)
+
+                else
+
+                    setStatus(
+                        "Waiting for Infinity Castle",
+                        true
+                    )
+
+                    task.wait(0.5)
+
+                end
+
+            end
+
+            Hub.AutoTask = nil
+
+            if Hub.Alive then
+
+                setStatus(
+                    "Disabled",
+                    false
+                )
+
+            end
+
+        end)
+end
+
+--========================================================
+-- TOGGLE HANDLER
+--========================================================
+
+connect(
+    Toggle.MouseButton1Click,
+    function()
+
+        if not Hub.Alive then
+            return
+        end
+
+        Hub.AutoCastle =
+            not Hub.AutoCastle
+
+        updateToggle()
+
+        if Hub.AutoCastle then
+
+            setStatus(
+                "Enabled",
+                true
+            )
+
+            runAutoCastle()
 
         else
 
-            battleLabel.Text =
-                "No active encounter"
-        end
-
-        local pendingReward =
-            state.Pending
-            or {}
-
-        rewards.Text =
-            string.format(
-                "Pending: %d coins | %d gems | %d crystals",
-
-                pendingReward.Coins
-                    or 0,
-
-                pendingReward.Gems
-                    or 0,
-
-                pendingReward.Crystals
-                    or 0
+            setStatus(
+                "Disabled",
+                false
             )
 
-        local raidConfig =
-            Config.RaidAutoEquip
-            or {}
-
-        autoEquipLabel.Text =
-            string.format(
-                "Raid Auto Equip: %s | %d-%ds",
-
-                state.AutoEquipBestRaid
-                    and "ON"
-                    or "OFF",
-
-                raidConfig.MinSeconds
-                    or 0,
-
-                raidConfig.MaxSeconds
-                    or 0
-            )
-
-        local selectedUnit = nil
-
-        for _, unit
-            in ipairs(
-                state.Units
-                or {}
-            ) do
-
-            if unit.UID ==
-                selected then
-
-                selectedUnit =
-                    unit
-
-                break
-            end
-        end
-
-        if selected
-            and not selectedUnit then
-
-            selected = nil
-            confirmFusion = nil
-
-            selectedLabel.Text =
-                "Select a unit."
-        end
-
-        renderInventory()
-    end
-)
-
--- =========================================================
--- KEYBINDS
--- =========================================================
-
-connect(
-    UserInputService.InputBegan,
-
-    function(
-        input,
-        processed
-    )
-
-        if processed then
-            return
-        end
-
-        if input.KeyCode ==
-            Enum.KeyCode.RightControl then
-
-            main.Visible =
-                not main.Visible
-
-        elseif input.KeyCode ==
-            Enum.KeyCode.Space then
-
-            if state
-                and state.Battle then
-
-                send("Attack")
-            end
         end
     end
 )
 
--- =========================================================
--- CLOSE / STOP
--- =========================================================
+--========================================================
+-- UNLOAD FUNCTION
+--========================================================
 
-function Runtime.Stop()
+function Hub.Unload()
 
-    if not Runtime.Running then
+    if not Hub.Alive then
         return
     end
 
-    Runtime.Running = false
-    Runtime.AutoAttack = false
+    Hub.Alive = false
+    Hub.AutoCastle = false
 
-    for _, connection
-        in ipairs(
-            Runtime.Connections
-        ) do
+    -- Stop task
+    if Hub.AutoTask then
 
         pcall(function()
-            connection:
-                Disconnect()
+
+            task.cancel(
+                Hub.AutoTask
+            )
+
         end)
+
+        Hub.AutoTask = nil
+    end
+
+    -- Disconnect UI events
+    for _, connection
+        in ipairs(
+            Hub.Connections
+        )
+    do
+
+        pcall(function()
+            connection:Disconnect()
+        end)
+
     end
 
     table.clear(
-        Runtime.Connections
+        Hub.Connections
     )
 
-    if gui then
-        gui:Destroy()
+    -- Destroy UI
+    if Hub.Gui then
+
+        pcall(function()
+            Hub.Gui:Destroy()
+        end)
+
     end
 
-    if env.AnimeBossDemoHub
-        == Runtime then
+    -- Remove global reference
+    if
+        ENV.BeatBossHub
+        == Hub
+    then
 
-        env.AnimeBossDemoHub =
-            nil
+        ENV.BeatBossHub = nil
+
     end
-
-    print(
-        "[AnimeBoss] Script stopped."
-    )
 end
 
+--========================================================
+-- UNLOAD BUTTON
+--========================================================
+
 connect(
-    close.Activated,
-    Runtime.Stop
+    Unload.MouseButton1Click,
+    function()
+
+        tween(
+            Unload,
+            {
+                BackgroundColor3 =
+                    Colors.RedDark
+            }
+        )
+
+        task.wait(0.08)
+
+        Hub.Unload()
+    end
 )
 
--- =========================================================
--- START
--- =========================================================
+connect(
+    Close.MouseButton1Click,
+    function()
+
+        Hub.Unload()
+    end
+)
+
+-- Hover unload
+connect(
+    Unload.MouseEnter,
+    function()
+
+        tween(
+            Unload,
+            {
+                BackgroundColor3 =
+                    Color3.fromRGB(
+                        58,
+                        30,
+                        33
+                    )
+            }
+        )
+
+    end
+)
+
+connect(
+    Unload.MouseLeave,
+    function()
+
+        tween(
+            Unload,
+            {
+                BackgroundColor3 =
+                    Color3.fromRGB(
+                        42,
+                        25,
+                        28
+                    )
+            }
+        )
+
+    end
+)
+
+--========================================================
+-- DRAG WINDOW
+--========================================================
+
+local Dragging = false
+local DragStart
+local StartPosition
+
+connect(
+    Top.InputBegan,
+    function(input)
+
+        if
+            input.UserInputType
+            == Enum.UserInputType.MouseButton1
+        then
+
+            Dragging = true
+            DragStart =
+                input.Position
+
+            StartPosition =
+                Window.Position
+
+        end
+
+    end
+)
+
+connect(
+    UIS.InputChanged,
+    function(input)
+
+        if
+            Dragging
+            and input.UserInputType
+            == Enum.UserInputType.MouseMovement
+        then
+
+            local delta =
+                input.Position
+                - DragStart
+
+            Window.Position =
+                UDim2.new(
+                    StartPosition.X.Scale,
+                    StartPosition.X.Offset
+                        + delta.X,
+
+                    StartPosition.Y.Scale,
+                    StartPosition.Y.Offset
+                        + delta.Y
+                )
+
+        end
+
+    end
+)
+
+connect(
+    UIS.InputEnded,
+    function(input)
+
+        if
+            input.UserInputType
+            == Enum.UserInputType.MouseButton1
+        then
+
+            Dragging = false
+
+        end
+
+    end
+)
+
+--========================================================
+-- INITIAL STATE
+--========================================================
+
+updateToggle()
+
+setStatus(
+    "Disabled",
+    false
+)
 
 print(
-    "[AnimeBoss] Client loaded."
+    "[BeatBoss] Hub loaded successfully."
 )
-
-print(
-    "[AnimeBoss] RightCtrl = hide/show"
-)
-
-send("Sync")
